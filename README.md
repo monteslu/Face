@@ -7,7 +7,7 @@ Side loadable app to bi-directionally communicate from Google Glass to a websock
 
 ![Screenshot](screenshot.png)
 
-## usage
+## Usage
 
 When the app is loaded onto a Google Glass device, it makes a connection to a simple [Reflector websocket server](https://github.com/monteslu/reflector)  and recevies a channel Id upon connection.  It then immedieately begins streaming sensor data and receiving incoming messages from other clients.
 
@@ -16,6 +16,16 @@ The channel Id can be used by other web applications to connect to the same webs
 
 
 There are also two buttons that can be clicked from the Glass' track pad.  They will broadcast an event with an 'A' or 'B' value respectively to each client connected on the same channel.
+
+
+
+
+
+## Why?
+
+
+[![Why](noface.png)](https://twitter.com/npmjs/status/320570485127667713)
+
 
 
 
