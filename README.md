@@ -7,7 +7,7 @@ Side loadable app to bi-directionally communicate from Google Glass to a websock
 
 ![Screenshot](screenshot.png)
 
-## Usage
+## How it works
 
 When the app is loaded onto a Google Glass device, it makes a connection to a simple [Reflector websocket server](https://github.com/monteslu/reflector)  and recevies a channel Id upon connection.  It then immedieately begins streaming sensor data and receiving incoming messages from other clients.
 
@@ -17,6 +17,54 @@ The channel Id can be used by other web applications to connect to the same webs
 
 There are also two buttons that can be clicked from the Glass' track pad.  They will broadcast an event with an 'A' or 'B' value respectively to each client connected on the same channel.
 
+
+
+## Usage
+
+The Glass broadcasts sensor data messages to all connected clients under the 'broadcast' topic.  The data is formatted as:
+```javascript
+{
+  "id":"3381972", //the channel it's broadcasting on
+  "sensors":{
+    "pitch":-95.88117980957031,
+    "roll":-1.8725770711898804,
+    "azimuth":283.96575927734375
+  }
+}
+```
+
+If a wink is detected by Glass, it will broadcast a wink event on the broadcast topic:
+```javascript
+{
+  "id":"3381972",
+  "event":"wink"
+}
+```
+
+If the A button is clicked on the Glass, it will broadcast an "A" event on the broadcast topic:
+```javascript
+{
+  "id":"3381972",
+  "event":"A"
+}
+```
+
+
+If you want to send a message to Glass to be displayed directly on the Glass display:
+```javascript
+socket.emit('broadcast', {
+  "id":"3381972",
+  "msg":"hello, glass!"
+});
+```
+
+If you want the client to tell the Glass to take a picture:
+```javascript
+socket.emit('broadcast', {
+  "id":"3381972",
+  "action":"camera"
+});
+```
 
 
 
