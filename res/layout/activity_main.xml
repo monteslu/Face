@@ -10,7 +10,6 @@
     tools:context=".MainActivity"
     android:background="#000"
     android:clickable="true"
-    android:onClick="onClick_activity"
      >
 
     <TextView
