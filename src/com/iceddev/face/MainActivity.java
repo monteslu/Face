@@ -1,12 +1,5 @@
 package com.iceddev.face;
 
-import java.net.URI;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-import com.codebutler.android_websockets.SocketIOClient;
-
 import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -17,309 +10,266 @@ import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.location.LocationManager;
+import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiManager;
 import android.os.Bundle;
+import android.text.format.Formatter;
 import android.util.Log;
+import android.view.GestureDetector;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.WindowManager.LayoutParams;
 import android.widget.TextView;
-import org.json.*;
+import android.widget.Toast;
 
-public class MainActivity extends Activity implements SensorEventListener {
-	
-	//which reflector socket server to post to? 
-    private static final String SOCKET_SERVER = "http://10.0.2.2:8080";
-	//private static final String SOCKET_SERVER = "http://192.168.0.101:8080";
-    
-    //allow remote taking of pictures from a broadcast?
-    private static final boolean ALLOW_REMOTE_CAMERA_SHOT =  true;
-    
-    //min time between each broadcast of sensor data
-    private static final long MIN_TIME_BETWEEN_SENSOR_BROADCAST = 100;
+import com.iceddev.eyesocket.Server;
 
-    
-    private static final String LOG_TAG = "SensorTest";
-    
-	private TextView text;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
-	private TextView chanText;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 
-	private SensorManager mSensorManager;
+import static android.text.format.Formatter.*;
+import static android.view.GestureDetector.OnGestureListener;
+import static android.view.GestureDetector.SimpleOnGestureListener;
 
-	private Sensor mOrientation;
+public class MainActivity extends Activity {
 
-	private LocationManager mLocationManager;
-	protected long lastSensorSend = System.currentTimeMillis();
-	
-	String chanId = null;
-	SocketIOClient client = null;
+  private GestureDetector gestureDetector;
 
-	
-	float azimuth_angle;
-	float pitch_angle;
-	float roll_angle;
-    String lastMessage = "";
-    Object lastError = null;
-	
+  private static final int PORT = 1338;
+  private Server server;
 
-	IntentFilter winkIntentFilter;
-	
-	protected BroadcastReceiver winkReceiver = new BroadcastReceiver(){
-		@Override
-		public void onReceive(Context context, Intent intent) {
-			Map<String, Object> map = new HashMap<String, Object>();
-			map.put("event", "wink");	
-	    	broadcastWebsocket(map);
-		
-		}
-	};
-	
-    public void onClick_send(String btn) {
-    	Map<String, Object> map = new HashMap<String, Object>();
-		map.put("event", btn);	
-    	broadcastWebsocket(map);
+  //allow remote taking of pictures from a broadcast?
+  private static final boolean ALLOW_REMOTE_CAMERA_SHOT =  true;
 
+  private static final String LOG_TAG = "SensorTest";
+
+  private TextView text;
+
+  private TextView chanText;
+
+  private SensorManager mSensorManager;
+
+  private Sensor mOrientation;
+
+  private LocationManager mLocationManager;
+
+  float azimuth_angle;
+  float pitch_angle;
+  float roll_angle;
+  String lastMessage = "";
+  Object lastError = null;
+
+  private Data sensorData;
+
+  private Map<String, Object> data;
+
+  public void setButtons(String keyPressed){
+    JSONObject buttons = (JSONObject) data.get("buttons");
+    Iterator keys = buttons.keys();
+    while(keys.hasNext()){
+      String key = (String) keys.next();
+      try {
+        buttons.put(key, key.equals(keyPressed));
+      } catch (JSONException jse){
+        Log.w(LOG_TAG, "error serializing json" + jse.toString());
+      }
     }
-    
-    public void onClick_A(View view) {
-    	onClick_send("A");
+  }
 
+  public void onClick_A(View view) {
+    sensorData.setButton("A", true);
+  }
+
+  public void onClick_B(View view) {
+    sensorData.setButton("B", true);
+  }
+
+
+  public void broadcastWebsocket(Map<String, Object> map){
+    try{
+      JSONObject jsObj = new JSONObject();
+      for (String key : map.keySet()) {
+        jsObj.put(key, map.get(key));
+      }
+      JSONArray arguments = new JSONArray();
+      arguments.put(jsObj);
+      server.sendData(arguments);
+    }catch(Exception jse){
+      server.sendData(jse);
+      Log.w(LOG_TAG, "error broadcasting" + jse.toString());
     }
-    
-    public void onClick_B(View view) {
-    	onClick_send("B");
+  }
 
+  @Override
+  public void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    getWindow().addFlags(LayoutParams.FLAG_KEEP_SCREEN_ON);
+    requestWindowFeature(Window.FEATURE_NO_TITLE);
+    getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+
+    setContentView(R.layout.activity_main);
+
+    text = (TextView) findViewById(R.id.text);
+    chanText = (TextView) findViewById(R.id.chan);
+    WifiManager wifiMgr = (WifiManager) getSystemService(WIFI_SERVICE);
+    WifiInfo wifiInfo = wifiMgr.getConnectionInfo();
+    int ip = wifiInfo.getIpAddress();
+    final String ipAddress = formatIpAddress(ip);
+    chanText.setText("IP: " + ipAddress);
+
+    mSensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
+    List<Sensor> sensorList = mSensorManager.getSensorList(Sensor.TYPE_ALL);
+    for(Sensor sensor : sensorList) {
+      Log.i(LOG_TAG, "Found sensor: " + sensor.getName());
     }
-   
-    
-    public void broadcastWebsocket(Map<String, Object> map){
-    	try{
-    		JSONObject jsObj = new JSONObject();
-    		for (String key : map.keySet()) {
-    		    jsObj.put(key, map.get(key));
-    		}
-    		jsObj.put("id", chanId);				
-			JSONArray arguments = new JSONArray();
-			arguments.put(jsObj);
-			client.emit("broadcast", arguments); //Event
-		}catch(Exception jse){
-			Log.w(LOG_TAG, "error broadcasting" + jse.toString());
-		}
+
+    gestureDetector = new GestureDetector(this, gestureListener);
+
+    mOrientation = mSensorManager.getDefaultSensor(Sensor.TYPE_ORIENTATION);
+
+    data = new HashMap<String, Object>();
+
+    JSONObject gestures = new JSONObject();
+    data.put("gestures", gestures);
+    JSONObject sensors = new JSONObject();
+    data.put("sensors", sensors);
+    JSONObject buttons = new JSONObject();
+    try{
+      buttons.put("A", false);
+      buttons.put("B", false);
+    } catch (JSONException jse){
+      Log.w(LOG_TAG, "error serializing json" + jse.toString());
     }
-    
-	
 
-	@Override
-	public void onCreate(Bundle savedInstanceState) {
-		super.onCreate(savedInstanceState);
-		getWindow().addFlags(LayoutParams.FLAG_KEEP_SCREEN_ON);
-        requestWindowFeature(Window.FEATURE_NO_TITLE);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+    data.put("buttons", buttons);
+  }
 
-		setContentView(R.layout.activity_main);
-		
+  @Override
+  public void onStart(){
+    super.onStart();
+    Log.v(LOG_TAG, "started");
+  }
 
-		text = (TextView) findViewById(R.id.text);
-		chanText = (TextView) findViewById(R.id.chan);
+  @Override
+  protected void onResume() {
+    super.onResume();
+    server = new Server(PORT);
+    sensorData = new Data(server);
+    mSensorManager.registerListener(orientationSensor, mOrientation, SensorManager.SENSOR_DELAY_UI);
+  }
 
-		mSensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
-		List<Sensor> sensors = mSensorManager.getSensorList(Sensor.TYPE_ALL);
-		for(Sensor sensor : sensors) {
-			Log.i(LOG_TAG, "Found sensor: " + sensor.getName());
-		}
-		
-		mOrientation = mSensorManager.getDefaultSensor(Sensor.TYPE_ORIENTATION);
-		
-		winkIntentFilter = new IntentFilter();
-	    winkIntentFilter.addAction("com.google.glass.action.EYE_GESTURE");
-		
-		
-	}
-	
+  @Override
+  protected void onPause() {
+    super.onPause();
+    server.close();
+    mSensorManager.unregisterListener(orientationSensor);
+  }
+
+  @Override
+  public boolean onGenericMotionEvent(MotionEvent event) {
+    gestureDetector.onTouchEvent(event);
+    return false;
+  }
+
+  protected String displayString(Object obj){
+    if(obj == null){
+      return "";
+    }else{
+      String longStr = obj.toString();
+      if(longStr.length() > 15){
+        return longStr.substring(0,14);
+      }else{
+        return longStr;
+      }
+    }
+  }
+
+  private SensorEventListener orientationSensor = new SensorEventListener() {
     @Override
-    public void onStart(){
-    	super.onStart();
-    	Log.v(LOG_TAG, "started");
-    	initSocket();
-    }
-    
-    public void initSocket(){
+    public void onSensorChanged(SensorEvent sensorEvent) {
+      azimuth_angle = sensorEvent.values[0];
+      pitch_angle = sensorEvent.values[1];
+      roll_angle = sensorEvent.values[2];
 
-        URI uri = URI.create(SOCKET_SERVER);
-		
-		client = new SocketIOClient(uri, new SocketIOClient.Handler() {
-		    @Override
-		    public void onConnect() {
-		        Log.d(LOG_TAG, "Connected! to socket");
-				try{
-					Log.d(LOG_TAG, "getting chan id");
-					JSONArray arguments = new JSONArray();
-					client.emit("getChan", arguments); //Message
-				
-				}catch(Exception jsonE){
-					Log.w(LOG_TAG, "error emiting first messags: "+jsonE.toString());
-				}
-		    }
-
-		    @Override
-		    public void on(String event, JSONArray arguments) {
-		    	
-		        Log.d(LOG_TAG, String.format("Got event %s: %s", event, arguments.toString() ));
-		        if(event.equals("chanId")){
-		        	try{
-                        chanId = arguments.getString(0);
-		        	}catch(JSONException jse){
-		        		Log.w(LOG_TAG, "error getting chanId: " + jse.toString());
-		        	}
-		        	
-
-		        }else if(event.equals("broadcast")){
-                    try{
-                        Log.w(LOG_TAG, "broadcast: " + arguments.get(0).toString());
-                        JSONObject payload = arguments.getJSONObject(0);
-                        
-                        if(payload.has("msg")){
-                        	lastMessage = payload.get("msg").toString();
-                        }
-                        
-                        if(payload.has("action")){
-                        	String action = payload.get("action").toString();
-                        	if("camera".equals(action) && ALLOW_REMOTE_CAMERA_SHOT){
-	                    		//The sloppy way of launching the default camera taking app
-	                            Intent i = new Intent("android.intent.action.CAMERA_BUTTON");
-	                            sendBroadcast(i);
-	                            
-                        	}
-                        }
-                    }catch(JSONException jse){
-                        Log.w(LOG_TAG, "error getting broadcast: " + jse.toString());
-                    }
-
-
-                }
-		    }
-
-		    @Override
-		    public void onJSON(JSONObject json) {
-		        //try {
-		            Log.d(LOG_TAG, String.format("Got JSON Object: %s", json.toString()));
-		        //} catch(JSONException e) {
-		       // }
-		    }
-
-		    @Override
-		    public void onMessage(String message) {
-		        Log.d(LOG_TAG, String.format("Got message: %s", message));
-		    }
-
-		    @Override
-		    public void onDisconnect(int code, String reason) {
-		        Log.d(LOG_TAG, String.format("Disconnected! Code: %d Reason: %s", code, reason));
-		    }
-
-		    @Override
-		    public void onError(Exception error) {
-		        Log.e(LOG_TAG, "Error!", error);
-                lastError = error;
-		    }
-
-		    @Override
-		    public void onConnectToEndpoint(String endpoint) {
-		        Log.d(LOG_TAG, "Connected to endpoint");
-		    }
-		});
-
-		client.connect();
-
-
-    }
-
-	@Override
-	public void onAccuracyChanged(Sensor sensor, int accuracy) {
-	}
-
-	@Override
-	protected void onResume() {
-		super.onResume();
-		mSensorManager.registerListener(this, mOrientation,
-				SensorManager.SENSOR_DELAY_NORMAL);
-		registerReceiver(winkReceiver, winkIntentFilter);
-	}
-
-	@Override
-	protected void onPause() {
-		super.onPause();
-		mSensorManager.unregisterListener(this);
-		unregisterReceiver(winkReceiver);
-	}
-
-    protected String displayString(Object obj){
-        if(obj == null){
-            return "";
-        }else{
-            String longStr = obj.toString();
-            if(longStr.length() > 15){
-                return longStr.substring(0,14);
-            }else{
-                return longStr;
-            }
+      runOnUiThread(new Runnable() {
+        @Override
+        public void run() {
+          text.setText("msg:" + displayString(lastMessage) +
+                  "\n" + "a,p,r:" + new Float(azimuth_angle).intValue() + "," +  new Float(pitch_angle).intValue() + "," + new Float(roll_angle).intValue() +
+                  "\n" + "err:" + displayString(lastError));
         }
+      });
+
+      JSONObject orientation = new JSONObject();
+
+      try {
+        orientation.put("pitch", pitch_angle);
+        orientation.put("azimuth", azimuth_angle);
+        orientation.put("roll", roll_angle);
+        sensorData.setOrientation(orientation);
+      } catch (JSONException e) {
+        Log.e("JSON ERROR", e.toString());
+      }
     }
 
-	@Override
-	public void onSensorChanged(SensorEvent event) {
-		azimuth_angle = event.values[0];
-		pitch_angle = event.values[1];
-		roll_angle = event.values[2];
-		
-		
-		runOnUiThread(new Runnable() {
-			
-			@Override
-			public void run() {
-				text.setText("msg:" + displayString(lastMessage) +
-                        "\n" + "a,p,r:" + new Float(azimuth_angle).intValue() + "," +  new Float(pitch_angle).intValue() + "," + new Float(roll_angle).intValue() +
-                        "\n" + "err:" + displayString(lastError));
-				chanText.setText("chanId: " + chanId);
-				
-			}
-		});
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int i) {
 
-	    
-	
-		
-		//dumb throttling
-		if( (System.currentTimeMillis() - lastSensorSend) > MIN_TIME_BETWEEN_SENSOR_BROADCAST){
-			
-			
-			if(client != null && chanId != null){
+    }
+  };
 
-				Map<String, Object> map = new HashMap<String, Object>();
-				JSONObject sensors = new JSONObject();	
-				
-				
-				try {
-					sensors.put("pitch", pitch_angle);
-					sensors.put("azimuth", azimuth_angle);
-					sensors.put("roll", roll_angle);
-				} catch (JSONException e) {
-					// TODO Auto-generated catch block
-					e.printStackTrace();
-				}
-				
-				
-				map.put("sensors", sensors);
-				
-		    	broadcastWebsocket(map);
-		    				
-				lastSensorSend = System.currentTimeMillis();
-			}
-		}
-	}
+  private OnGestureListener gestureListener = new GestureDetector.SimpleOnGestureListener() {
 
+    @Override
+    public boolean onDown(MotionEvent motionEvent) {
+      sensorData.setGesture("down", true);
+      return false;
+    }
 
+    @Override
+    public boolean onDoubleTap(MotionEvent motionEvent) {
+      sensorData.setGesture("doubleTap", true);
+      return false;
+    }
 
+    @Override
+    public void onShowPress(MotionEvent motionEvent) {
+//       sensorData.setGesture("longPress", true);
+    }
+
+    @Override
+    public boolean onSingleTapUp(MotionEvent motionEvent) {
+      sensorData.setGesture("tap", true);
+      return false;
+    }
+
+    @Override
+    public boolean onScroll(MotionEvent motionEvent, MotionEvent motionEvent2, float distanceX, float distanceY) {
+      Log.d("Gesture Example", "onScroll: distanceX:" + distanceX + " distanceY:" + distanceY);
+      if (distanceX < -1) {
+        sensorData.setGesture("scrollRight", true);
+      } else if (distanceX > 1) {
+        sensorData.setGesture("scrollLeft", true);
+      }
+      return false;
+    }
+
+    public void onLongPress(MotionEvent motionEvent) {
+
+    }
+
+    @Override
+    public boolean onFling(MotionEvent motionEvent, MotionEvent motionEvent2, float v, float v2) {
+      return false;
+    }
+  };
 
 }
-
